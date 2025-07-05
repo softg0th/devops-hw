@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bot
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: bot
+        tier: api
+    spec:
+      containers:
+        - name: bot
+          image: telegram-bot:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: BOT_TOKEN
+              value: ""
+            - name: CHAT_ID
+              value: ""
+          resources:
+            requests:
+              cpu: "100m"
+            limits:
+              cpu: "500m"

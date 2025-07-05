@@ -1,0 +1,9 @@
+.idea
+data
+node_modules
+.venv
+__pycache__
+gitlab
+builds
+cache
+backend.zip

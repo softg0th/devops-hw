@@ -1,0 +1,16 @@
+
+adminPassword: admin
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: YandexCloudPrometheus
+        type: prometheus
+        access: proxy
+        url: https://monitoring.api.cloud.yandex.net/prometheus/workspaces
+        isDefault: true
+        jsonData:
+          httpHeaderName1: "Authorization"
+        secureJsonData:
+          httpHeaderValue1: ""

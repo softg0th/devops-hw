@@ -1,0 +1,150 @@
+stages:
+  - build
+  - test
+  - scan
+  - dockerize
+  - push
+  - deploy
+
+variables:
+  BACKEND_PORT: 9111
+  DB_PORT: 5432
+  DB_USER: postgres
+  DB_PASSWORD: 12345
+  DB_NAME: warehouse
+  DB_URL: "postgresql://postgres:12345@localhost:5432/warehouse"
+  YC_REGISTRY_ID: crp0eri98ul6tprvn7sn
+  YC_REGION: ru-central1
+  REGISTRY_URL: container-registry.cloud.yandex.net
+  IMAGE_BACKEND: "$REGISTRY_URL/$YC_REGISTRY_ID/backend:$CI_COMMIT_SHORT_SHA"
+  IMAGE_FRONTEND: "$REGISTRY_URL/$YC_REGISTRY_ID/frontend:$CI_COMMIT_SHORT_SHA"
+
+build-backend:
+  stage: build
+  tags: [devops-backend]
+  script:
+    - cd backend
+    - go mod tidy
+    - go build -o cmd/main ./cmd/main.go
+  artifacts:
+    paths:
+      - backend/cmd/main
+    expire_in: 1 hour
+
+build-frontend:
+  stage: build
+  tags: [devops-frontend]
+  script:
+    - cd frontend
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - frontend/build
+    expire_in: 1 hour
+
+test-backend:
+  stage: test
+  tags: [devops-backend]
+  dependencies:
+    - build-backend
+  script:
+    - docker stop pg-test || true
+    - docker rm pg-test || true
+    - docker run -d --name pg-test -e POSTGRES_DB=$DB_NAME -e POSTGRES_USER=$DB_USER -e POSTGRES_PASSWORD=$DB_PASSWORD -p $DB_PORT:5432 postgres:14
+    - sleep 5
+    - docker cp db/init.sql pg-test:/init.sql
+    - docker exec pg-test psql -U $DB_USER -d $DB_NAME -f /init.sql
+    - lsof -ti tcp:$BACKEND_PORT | xargs kill -9 || true
+    - cp backend/.env backend/cmd/.env
+    - chmod +x backend/cmd/main
+    - export LOG_PATH="$CI_PROJECT_DIR/backend.log"
+    - backend/cmd/main > "$LOG_PATH" 2>&1 &
+    - for i in {1..20}; do curl -sSf http://localhost:$BACKEND_PORT/api/ && break || sleep 1; done
+    - cd backend/tests
+    - pip3 install --no-cache-dir -r requirements.txt
+    - python3.10 -m pytest test_api.py || true
+    - echo "========= BACKEND LOG ========="
+    - cat "$LOG_PATH" || echo "No backend log found"
+    - echo "========= TEST LOGS ========="
+    - tail -n 100 test_api.py
+
+test-frontend:
+  stage: test
+  tags: [devops-frontend]
+  dependencies:
+    - build-frontend
+  script:
+    - cd frontend
+    - npm install
+    - npm run test -- --coverage --collectCoverageFrom="src/pages/AnimalsPageController.tsx"
+  artifacts:
+    paths:
+      - frontend/coverage
+    expire_in: 1 hour
+    
+frontend-sast-scan:
+  stage: scan
+  tags: [devops-frontend]
+  script:
+    - cd frontend
+    - sonar-scanner -Dsonar.projectKey=frontend -Dsonar.sources=src/pages -Dsonar.tests=src/pages -Dsonar.inclusions=src/pages/AnimalsPageController.tsx -Dsonar.test.inclusions=src/pages/tests/**/*.test.tsx -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info -Dsonar.qualitygate.wait=true -Dsonar.verbose=true
+  dependencies:
+    - test-frontend
+  artifacts:
+    paths:
+      - frontend/coverage
+    expire_in: 1 hour
+    
+backend-sast-scan:
+  stage: scan
+  tags: [devops-backend]
+  script:
+    - cd backend
+    - go mod tidy
+    - go test ./internal/api -coverprofile=coverage.out -coverpkg=restservice/internal/api
+    - go tool cover -func=coverage.out | tee coverage.txt
+    - go tool cover -html=coverage.out -o coverage.html
+    - TOTAL=$(grep total coverage.txt | awk '{print substr($3, 1, length($3)-1)}')
+    - sonar-scanner -Dsonar.projectKey=backend -Dsonar.sources=internal/api -Dsonar.tests=internal/api -Dsonar.test.inclusions=**/*_test.go -Dsonar.go.coverage.reportPaths=coverage.out -Dsonar.qualitygate.wait=true -Dsonar.verbose=true
+  artifacts:
+    paths:
+      - backend/coverage.out
+      - backend/coverage.html
+      - backend/coverage.txt
+    expire_in: 1 hour
+
+dockerize:
+  stage: dockerize
+  tags: [devops-backend]
+  script:
+    - docker build -t $IMAGE_BACKEND -f backend/Dockerfile backend
+    - docker build -t $IMAGE_FRONTEND -f frontend/Dockerfile frontend
+
+push:
+  stage: push
+  tags: [devops-backend]
+  script:
+    - export PATH="/Users/ne/yandex-cloud/bin:$PATH"
+    - yc config set service-account-key ~/key.json
+    - yc config set cloud-id "$YC_CLOUD_ID"
+    - yc config set folder-id "$YC_FOLDER_ID"
+    - yc container registry configure-docker
+    - docker push $IMAGE_BACKEND
+    - docker push $IMAGE_FRONTEND
+
+deploy-backend:
+  stage: deploy
+  tags: [devops-backend]
+  script:
+    - minikube image load $IMAGE_BACKEND
+    - kubectl apply -f k8s/backend/deployment.yaml
+    - kubectl apply -f k8s/backend/service.yaml
+
+deploy-frontend:
+  stage: deploy
+  tags: [devops-frontend]
+  script:
+    - minikube image load $IMAGE_FRONTEND
+    - kubectl apply -f k8s/frontend/deployment.yaml
+    - kubectl apply -f k8s/frontend/service.yaml

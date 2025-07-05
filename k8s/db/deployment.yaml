@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db
+  template:
+    metadata:
+      labels:
+        app: db
+        tier: db 
+    spec:
+      volumes:
+        - name: initdb
+          emptyDir: {}
+        - name: init-scripts
+          configMap:
+            name: db-init-scripts
+      initContainers:
+        - name: init-copy
+          image: busybox
+          command: ["sh", "-c", "cp /scripts/* /docker-entrypoint-initdb.d/"]
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /scripts
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+      containers:
+        - name: db
+          image: postgres:latest
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: "12345"
+            - name: POSTGRES_DB
+              value: warehouse
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d

@@ -1,0 +1,62 @@
+---
+- name: Install Docker and configure local registry with volume
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisite packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Install Docker CE
+      apt:
+        name: docker-ce
+        state: latest
+        update_cache: yes
+
+    - name: Add user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Ensure registry data directory exists
+      file:
+        path: /opt/registry/data
+        state: directory
+        owner: 1000
+        group: 1000
+        mode: '0755'
+
+    - name: Run local Docker registry container with proper binding
+      docker_container:
+        name: registry
+        image: registry:2
+        state: started
+        restart_policy: always
+        ports:
+          - "5000:5000"
+        volumes:
+          - /opt/registry/data:/var/lib/registry
+        env:
+          REGISTRY_HTTP_ADDR: 0.0.0.0:5000
